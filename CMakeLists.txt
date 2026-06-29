@@ -14,8 +14,12 @@ ELSE(${build} MATCHES "release")
     add_definitions(-DLINUX -DGCC)
 ENDIF(${build} MATCHES "debug")
 
-include_directories(linux_network linux_server linux_communicator)
+include_directories(. linux_server linux_communicator)
 
 add_executable(linux_network main.cpp linux_server/io_epoll.cc)
+add_executable(thread_pool_server thread_pool_main.cpp thread_pool_server.cpp)
 
 target_link_libraries(linux_network pthread rt)
+target_link_libraries(thread_pool_server pthread rt)
+
+add_subdirectory(linux_client)

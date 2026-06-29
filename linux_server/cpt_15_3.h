@@ -187,7 +187,7 @@ void processpool<T>::run_child() {
                     // initialize the client data, T must have an init function to initialize the client data
                     users[connfd].init(m_epollfd, connfd, client_address);
                 }
-            } else if ((sockfd == sig_pipefd[0]) && (events[i].events & EPOLLIN)) { // signal arrives
+            } else if ((sockfd == sig_pipefd[0]) && (events[i].events & EPOLLIN)) { // signal arrives solved by subprocess
                 int sig;
                 char signals[1024];
                 ret = recv(sig_pipefd[0], signals, sizeof(signals), 0);
@@ -249,6 +249,7 @@ void processpool<T>::run_parent() {
         int sockfd = events[i].data.fd;
         if (sockfd == m_listenfd)
         {
+            // if a new connection arrives, send it to a child process by round robin
             int i = sub_process_counter;
             do
             {
@@ -311,6 +312,8 @@ void processpool<T>::run_parent() {
                         case SIGTERM:
                         case SIGINT:
                         {
+                            // parent process received termination signal, kill all child processes
+                            // 当然也可以不杀死子进程，让子进程自己处理信号退出，通过向父子进程间的通信管道发送信号的方式来实现父子进程的退出
                             printf("kill all the child now\n");
                             for (int i = 0; i < m_process_number; i++)
                             {
@@ -335,5 +338,76 @@ void processpool<T>::run_parent() {
 }
 close(m_epollfd);
 }
+
+// implement CGI server by process pool
+class cgi_conn {
+public:
+    cgi_conn() {}
+    ~cgi_conn() {}
+public:
+    void init(int epollfd, int sockfd, const sockaddr_in& client_addr) {
+        m_epollfd = epollfd;
+        m_sockfd = sockfd;
+        m_address = client_addr;
+        memset(m_buf, '\0', BUFFER_SIZE);
+        m_read_idx = 0;
+    }
+
+    void process() {
+        int idx = 0;
+        int ret = -1;
+        while (true) {
+            idx = m_read_idx;;
+            ret = recv(m_sockfd, m_buf + idx, BUFFER_SIZE - 1 - idx, 0);
+            if (ret < 0) {
+                if (errno != EAGAIN) {
+                    removefd(m_epollfd, m_sockfd);
+                    break;
+                }
+            } else if (ret == 0) { // connection closed by client
+                removefd(m_epollfd, m_sockfd);
+                break;
+            } else {
+                m_read_idx += ret;
+                printf("user content is: %s\n", m_buf);
+                for (; idx < m_read_idx; idx++) {
+                    if ((idx >= 1) && (m_buf[idx - 1] == '\r') && (m_buf[idx] == '\n')) {
+                        break;
+                    }
+                }
+                if (idx == m_read_idx) {
+                    continue;
+                }
+                m_buf[idx - 1] = '\0';
+                char* file_name = m_buf;
+                if (access(file_name, F_OK) == -1) {
+                    removefd(m_epollfd, m_sockfd);
+                    break;
+                }
+                ret = fork();
+                if (ret == -1) {
+                    removefd(m_epollfd, m_sockfd);
+                    break;
+                } else if (ret > 0) {
+                    removefd(m_epollfd, m_sockfd);
+                    break;
+                } else {
+                    close(STDOUT_FILENO);
+                    dup(m_sockfd);
+                    execl(m_buf, m_buf, NULL);
+                    exit(0);
+                }
+            }
+        }
+    }
+
+private:
+    static const int BUFFER_SIZE = 1024;
+    static int m_epollfd;
+    int m_sockfd;
+    sockaddr_in m_address;
+    char m_buf[BUFFER_SIZE];
+    int m_read_idx; // the index of the next position to read data into the buffer
+};
 
 #endif
