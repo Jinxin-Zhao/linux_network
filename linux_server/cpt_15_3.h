@@ -30,6 +30,7 @@ public:
     int m_pipefd[2];    
 };
 
+// T是处理逻辑任务的类
 template <typename T>
 class processpool {
 private:
@@ -50,12 +51,12 @@ private:
     void run_parent();
     void run_child();
 private:
-    static const int MAX_PROCESS_NUMBER = 16;
-    static const int USER_PER_PROCESS = 65536;
-    static const int MAX_EVENT_NUMBER = 10000;
-    int m_process_number;
-    int m_idx;
-    int m_epollfd;
+    static const int MAX_PROCESS_NUMBER = 16; // maximum number of subprocesses
+    static const int USER_PER_PROCESS = 65536; // maximum number of users handled by each subprocess
+    static const int MAX_EVENT_NUMBER = 10000; // maximum number of events handled by epoll
+    int m_process_number; // the number of subprocesses
+    int m_idx; // the index of the subprocess
+    int m_epollfd; // epoll file descriptor
     int m_listenfd;
     int m_stop;
     process* m_sub_process;
@@ -116,12 +117,12 @@ processpool<T>::processpool(int listenfd, int process_number)
         assert(ret == 0);
         m_sub_process[i].m_pid = fork();
         assert(m_sub_process[i].m_pid >= 0);
-        if (m_sub_process[i].m_pid > 0) {
-            close(m_sub_process[i].m_pipefd[1]);
+        if (m_sub_process[i].m_pid > 0) { // parent process
+            close(m_sub_process[i].m_pipefd[1]); // close write end
             continue;
-        } else {
-            close(m_sub_process[i].m_pipefd[0]);
-            m_idx = i;
+        } else { // child process
+            close(m_sub_process[i].m_pipefd[0]); // close read end
+            m_idx = i; // set the index of the child process
             break;
         }
     }
@@ -153,8 +154,8 @@ void processpool<T>::run() {
 template <typename T>
 void processpool<T>::run_child() {
     setup_sig_pipe();
-    int pipefd = m_sub_process[m_idx].m_pipefd[1];
-    addfd(m_epollfd, pipefd);
+    int pipefd = m_sub_process[m_idx].m_pipefd[1]; // get the write end of the pipe
+    addfd(m_epollfd, pipefd); // add the pipe to epoll， parent process will send new connection to child process through this pipe
     epoll_event events[MAX_EVENT_NUMBER];
     T* users = new T[USER_PER_PROCESS];
     assert(users);
@@ -168,8 +169,9 @@ void processpool<T>::run_child() {
         }
         for (int i = 0; i < number; i++) {
             int sockfd = events[i].data.fd;
-            if ((sockfd == pipefd) && (events[i].events & EPOLLIN)) {
+            if ((sockfd == pipefd) && (events[i].events & EPOLLIN)) { // new connection from parent process
                 int client = 0;
+                // read the new connection's file descriptor from the pipe
                 ret = recv(sockfd, (char*)&client, sizeof(client), 0);
                 if (((ret < 0) && (errno != EAGAIN)) || ret == 0) {
                     continue;
@@ -182,9 +184,10 @@ void processpool<T>::run_child() {
                         continue;
                     }
                     addfd(m_epollfd, connfd);
+                    // initialize the client data, T must have an init function to initialize the client data
                     users[connfd].init(m_epollfd, connfd, client_address);
                 }
-            } else if ((sockfd == sig_pipefd[0]) && (events[i].events & EPOLLIN)) {
+            } else if ((sockfd == sig_pipefd[0]) && (events[i].events & EPOLLIN)) { // signal arrives
                 int sig;
                 char signals[1024];
                 ret = recv(sig_pipefd[0], signals, sizeof(signals), 0);
@@ -211,7 +214,7 @@ void processpool<T>::run_child() {
                         }
                     }
                 }
-            } else if (events[i].events & EPOLLIN) {
+            } else if (events[i].events & EPOLLIN) { // client data arrives
                 users[sockfd].process();
             } else {
                 continue;

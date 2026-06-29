@@ -1,11 +1,42 @@
 #include "common.h"
-//#include "demo.h"
+#include "demo.h"
 //#include "linux_communicator/io_pipe.h"
 //#include "linux_communicator/io_shared_memory.h"
 
 #include "linux_server/cpt_11_2_2.h"
 
+#include "linux_server/cpt_15_3.h"
+
+// chapter 15.3, process pool
+int cgi_conn::m_epollfd = -1;
+
 int main(int argc, char * argv[]) {
+    /// test chapter 15
+    if (argc <= 2) {
+        printf("usage: %s ip_address port_number\n", basename(argv[0]));
+        return 1;
+    }
+    const char* ip = argv[1];
+    int port = atoi(argv[2]);
+    int listenfd = socket(PF_INET, SOCK_STREAM, 0);
+    assert(listenfd >= 0);
+    int ret = 0;
+    struct sockaddr_in address;
+    bzero(&address, sizeof(address));
+    address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &address.sin_addr);
+    address.sin_port = htons(port);
+    ret = bind(listenfd, (struct sockaddr*)&address, sizeof(address));
+    assert(ret != -1);
+    ret = listen(listenfd, 5);
+    assert(ret != -1);
+    processpool<cgi_conn>* pool = processpool<cgi_conn>::create(listenfd);
+    if (pool) {
+        pool->run();
+        delete pool;
+    }
+    close(listenfd);
+
     /////////// test linux IO
     //test_pipe();
     //test_name_pipe(argc, argv);
@@ -15,15 +46,19 @@ int main(int argc, char * argv[]) {
     //test_shm_read();
 
     ////////// test epoll
-    //readout_LT();
-    //Write_ET_hang();
-    //Write_LT_loop();
-    //pure_ET();
+    // readout_LT();
+    // Write_ET_hang();
+    // Write_LT_loop();
+    // ipure_ET();
     //Reset_ET();
     //Write_ET_loop();
 
+    // pure_ET();
+    // pure_LT();
+    //readout_LT();
+
     ///////// test chapter 11_2_2.h
-    n_timer_server::test_timer_server(argc, argv);
+    // n_timer_server::test_timer_server(argc, argv);
 
     return 0;
 }
